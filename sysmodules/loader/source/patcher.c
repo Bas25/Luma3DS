@@ -32,33 +32,6 @@ static u32 patchMemory(u8 *start, u32 size, const void *pattern, u32 patSize, s3
     return i;
 }
 
-static Result fileOpen(IFile *file, FS_ArchiveID archiveId, const char *path, int flags)
-{
-    FS_Path filePath = {PATH_ASCII, strnlen(path, 255) + 1, path},
-            archivePath = {PATH_EMPTY, 1, (u8 *)""};
-
-    return IFile_Open(file, archiveId, archivePath, filePath, flags);
-}
-
-static bool dirCheck(FS_ArchiveID archiveId, const char *path)
-{
-    bool ret;
-    Handle handle;
-    FS_Archive archive;
-    FS_Path dirPath = {PATH_ASCII, strnlen(path, 255) + 1, path},
-            archivePath = {PATH_EMPTY, 1, (u8 *)""};
-
-    if(R_FAILED(FSLDR_OpenArchive(&archive, archiveId, archivePath))) ret = false;
-    else
-    {
-        ret = R_SUCCEEDED(FSLDR_OpenDirectory(&handle, archive, dirPath));
-        if(ret) FSDIR_Close(handle);
-        FSLDR_CloseArchive(archive);
-    }
-
-    return ret;
-}
-
 static bool openLumaFile(IFile *file, const char *path)
 {
     FS_ArchiveID archiveId = isSdMode ? ARCHIVE_SDMC : ARCHIVE_NAND_RW;

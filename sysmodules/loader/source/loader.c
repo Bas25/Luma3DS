@@ -7,6 +7,8 @@
 #include "fsreg.h"
 #include "pxipm.h"
 #include "srvsys.h"
+#include "strings.h"
+#include "cxiloader.h"
 
 #define MAX_SESSIONS    1
 #define HBLDR_3DSX_TID  (*(vu64 *)0x1FF81100)
@@ -115,39 +117,43 @@ static Result load_code(u64 progid, prog_addrs_t *shared, u64 prog_handle, int i
   Result res;
   u64 size;
   u64 total;
+  
+  
+  //attempt to load a patch cxi first
+  if (!loadCxiCode((void *)shared->text_addr, &size, (u64)shared->total_size << 12, progid)) {
+    archivePath.type = PATH_BINARY;
+    archivePath.data = &prog_handle;
+    archivePath.size = 8;
 
-  archivePath.type = PATH_BINARY;
-  archivePath.data = &prog_handle;
-  archivePath.size = 8;
+    filePath.type = PATH_BINARY;
+    filePath.data = CODE_PATH;
+    filePath.size = sizeof(CODE_PATH);
+    if (R_FAILED(IFile_Open(&file, ARCHIVE_SAVEDATA_AND_CONTENT2, archivePath, filePath, FS_OPEN_READ)))
+    {
+        svcBreak(USERBREAK_ASSERT);
+    }
 
-  filePath.type = PATH_BINARY;
-  filePath.data = CODE_PATH;
-  filePath.size = sizeof(CODE_PATH);
-  if (R_FAILED(IFile_Open(&file, ARCHIVE_SAVEDATA_AND_CONTENT2, archivePath, filePath, FS_OPEN_READ)))
-  {
-    svcBreak(USERBREAK_ASSERT);
-  }
+    // get file size
+    if (R_FAILED(IFile_GetSize(&file, &size)))
+    {
+        IFile_Close(&file);
+        svcBreak(USERBREAK_ASSERT);
+    }
 
-  // get file size
-  if (R_FAILED(IFile_GetSize(&file, &size)))
-  {
-    IFile_Close(&file);
-    svcBreak(USERBREAK_ASSERT);
-  }
+    // check size
+    if (size > (u64)shared->total_size << 12)
+    {
+        IFile_Close(&file);
+        return 0xC900464F;
+    }
 
-  // check size
-  if (size > (u64)shared->total_size << 12)
-  {
-    IFile_Close(&file);
-    return 0xC900464F;
-  }
-
-  // read code
-  res = IFile_Read(&file, &total, (void *)shared->text_addr, size);
-  IFile_Close(&file); // done reading
-  if (R_FAILED(res))
-  {
-    svcBreak(USERBREAK_ASSERT);
+    // read code
+    res = IFile_Read(&file, &total, (void *)shared->text_addr, size);
+    IFile_Close(&file); // done reading
+    if (R_FAILED(res))
+    {
+        svcBreak(USERBREAK_ASSERT);
+    }
   }
 
   // decompress
@@ -179,9 +185,12 @@ static Result HBLDR_Init(Handle *session)
   return res;
 }
 
+
+
 static Result loader_GetProgramInfo(exheader_header *exheader, u64 prog_handle)
 {
   Result res;
+  
 
   if (prog_handle >> 32 == 0xFFFF0000)
   {
@@ -228,6 +237,12 @@ static Result loader_GetProgramInfo(exheader_header *exheader, u64 prog_handle)
           res = cmdbuf[1];
         }
       }
+    } else if (nbSection0Modules > 5) { //check if we can load a cxi
+        u64 originalProgId = exheader->arm11systemlocalcaps.programid;
+        if (loadCxiExHeader(exheader, exheader->arm11systemlocalcaps.programid)) {
+			exheader->arm11systemlocalcaps.programid = originalProgId;
+			exheader->accessdesc.arm11systemlocalcaps.programid = originalProgId;
+		}
     }
   }
 
@@ -248,7 +263,10 @@ static Result loader_LoadProcess(Handle *process, u64 prog_handle)
   u32 data_mem_size;
   u64 progid;
 
-  // make sure the cached info corrosponds to the current prog_handle
+    //logstr("loadProc ");
+    //logu64(prog_handle);
+
+    // make sure the cached info corrosponds to the current prog_handle
   if (g_cached_prog_handle != prog_handle || g_exheader.arm11systemlocalcaps.programid == HBLDR_3DSX_TID)
   {
     res = loader_GetProgramInfo(&g_exheader, prog_handle);
@@ -360,6 +378,7 @@ static Result loader_RegisterProgram(u64 *prog_handle, FS_ProgramInfo *title, FS
   u64 prog_id;
 
   prog_id = title->programId;
+  
   if (prog_id >> 32 != 0xFFFF0000)
   {
     res = FSREG_CheckHostLoadId(prog_id);
@@ -409,6 +428,9 @@ static Result loader_UnregisterProgram(u64 prog_handle)
 {
   Result res;
 
+    //logstr("unregProg ");
+    //logu64(prog_handle);
+    
   if (prog_handle >> 32 == 0xFFFF0000)
   {
     return FSREG_UnloadProgram(prog_handle);
@@ -589,7 +611,7 @@ int main()
   g_active_handles = 2;
   g_cached_prog_handle = 0;
   index = 1;
-
+  
   reply_target = 0;
   term_request = 0;
   do
@@ -667,7 +689,7 @@ int main()
       }
     }
   } while (!term_request || g_active_handles != 2);
-
+  
   srvSysUnregisterService("Loader");
   svcCloseHandle(*srv_handle);
   svcCloseHandle(*notification_handle);
